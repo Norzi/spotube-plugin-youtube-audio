@@ -1,27 +1,14 @@
-import "module:std" as std
-
 import { AudioSourceEndpoint } from './segments/audio_source.ht'
 import { CorePlugin } from './segments/core.ht'
 
-var HttpClient = std.HttpClient
-var HttpBaseOptions = std.HttpBaseOptions
-
-class YouTubeAudioSourcePlugin {
+class YouTubeDirectAudioPlugin {
   var audioSource: AudioSourceEndpoint
   var core: CorePlugin
 
-  var api: HttpClient
-  
   construct (){
-    api = HttpClient(
-      HttpBaseOptions(
-        baseUrl: "https://example.com"
-      )
-    )
-    
     audioSource = AudioSourceEndpoint()
-    core = CorePlugin(api)
+    core = CorePlugin()
   }
 }
 
-export { TemplateMetadataProviderPlugin }
+export { YouTubeDirectAudioPlugin }
