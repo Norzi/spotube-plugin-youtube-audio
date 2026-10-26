@@ -1,0 +1,91 @@
+import 'module:std' as std
+import 'module:spotube_plugin' as spotube
+
+var StreamController = std.StreamController
+var Stream = std.Stream
+var LocalStorage = spotube.LocalStorage
+var SpotubeForm = spotube.SpotubeForm
+var JSON = std.JSON
+
+class AuthEndpoint {
+  final controller: StreamController
+  var credentials: Map
+
+  get authStateStream -> Stream => controller.stream
+
+  construct () {
+    controller = StreamController.broadcast()
+    initialize()
+  }
+
+  fun initialize() {
+    LocalStorage.getString("yt_cookie_auth").then((value) {
+      if (value == null || value.isEmpty) return
+      try {
+        credentials = JSON.decode(value)
+        controller.add({ type: "recovered" }.toJson())
+      } catch (e) {
+        // Ignore corrupt stored credentials; user can sign in again.
+      }
+    })
+  }
+
+  fun isAuthenticated() -> bool {
+    return credentials != null &&
+      credentials["cookie"] != null &&
+      !credentials["cookie"].isEmpty
+  }
+
+  /// Spotube's authentication form accepts a Cookie header copied from a
+  /// signed-in YouTube browser session. This is cookie-based auth, not Google
+  /// OAuth; current InnerTube clients generally accept cookies for web clients.
+  fun authenticate() -> Future {
+    return SpotubeForm.show(
+      "YouTube sign-in",
+      [
+        {
+          objectType: "text",
+          text: "Paste the Cookie header from a YouTube request in your browser. Do not share it; it grants access to your Google/YouTube session.",
+        }.toJson(),
+        {
+          objectType: "input",
+          id: "cookie",
+          variant: "text",
+          placeholder: "Cookie: SAPISID=…; SID=…; …",
+          required: true,
+        }.toJson(),
+      ]
+    ).then((values) {
+      if (values == null) return
+      var cookie = ""
+      for (var value in values) {
+        if (value["id"] == "cookie") cookie = value["value"] ?? ""
+      }
+      cookie = cookie.trim()
+      if (cookie.startsWith("Cookie:") || cookie.startsWith("cookie:")) {
+        cookie = cookie.substring(cookie.indexOf(":") + 1).trim()
+      }
+      if (cookie.isEmpty || !cookie.contains("=")) {
+        throw "Invalid cookie header. Paste the full Cookie header value from a YouTube request."
+      }
+
+      credentials = { "cookie": cookie }.toJson()
+      return LocalStorage.setString("yt_cookie_auth", JSON.encode(credentials)).then(() {
+        controller.add({ type: "login" }.toJson())
+      })
+    })
+  }
+
+  fun logout() {
+    return LocalStorage.remove("yt_cookie_auth").then(() {
+      credentials = null
+      controller.add({ type: "logout" }.toJson())
+    })
+  }
+
+  get cookie -> string {
+    return credentials == null ? "" : (credentials["cookie"] ?? "")
+  }
+}
+
+export { AuthEndpoint }
