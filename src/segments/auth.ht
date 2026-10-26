@@ -1,90 +1,132 @@
-import 'module:std' as std
-import 'module:spotube_plugin' as spotube
+import "module:std" as std
+import "module:spotube_plugin" as spotube
+import { sha1Hex } from './sha1.ht'
 
 var StreamController = std.StreamController
 var Stream = std.Stream
 var LocalStorage = spotube.LocalStorage
 var SpotubeForm = spotube.SpotubeForm
-var JSON = std.JSON
+var DateTime = std.DateTime
 
 class AuthEndpoint {
-  final controller: StreamController
-  var credentials: Map
+  var controller: StreamController
+  var cookie: string
+  var authenticated: bool
 
   get authStateStream -> Stream => controller.stream
 
   construct () {
     controller = StreamController.broadcast()
+    cookie = ""
+    authenticated = false
     initialize()
   }
 
-  fun initialize() {
-    LocalStorage.getString("yt_cookie_auth").then((value) {
-      if (value == null || value.isEmpty) return
-      try {
-        credentials = JSON.decode(value)
-        controller.add({ type: "recovered" }.toJson())
-      } catch (e) {
-        // Ignore corrupt stored credentials; user can sign in again.
+  fun initialize() -> Future {
+    return LocalStorage.getString("yt_cookie_auth").then((value) {
+      if (value == null || value.trim().isEmpty) {
+        cookie = ""
+        authenticated = false
+        controller.add({ "authenticated": false, "type": "state" }.toJson())
+        return
       }
+      cookie = value.trim()
+      authenticated = hasSessionCookie(cookie)
+      controller.add({ "authenticated": authenticated, "type": "state" }.toJson())
     })
   }
 
-  fun isAuthenticated() -> bool {
-    return credentials != null &&
-      credentials["cookie"] != null &&
-      !credentials["cookie"].isEmpty
+  fun hasSessionCookie(value: string) -> bool {
+    return value.contains("SAPISID=") || value.contains("__Secure-3PAPISID=") || value.contains("__Secure-1PAPISID=") || value.contains("SID=")
   }
 
-  /// Spotube's authentication form accepts a Cookie header copied from a
-  /// signed-in YouTube browser session. This is cookie-based auth, not Google
-  /// OAuth; current InnerTube clients generally accept cookies for web clients.
+  fun isAuthenticated() -> bool {
+    return authenticated && hasSessionCookie(cookie)
+  }
+
+  fun cookieValue(name: string) -> string {
+    var pieces = cookie.split(";")
+    for (var piece in pieces) {
+      var part = piece.trim()
+      var prefix = "${name}="
+      if (part.startsWith(prefix)) {
+        return part.substring(prefix.length)
+      }
+    }
+    return ""
+  }
+
+  fun authorizationValue() -> string {
+    var sapisid = cookieValue("SAPISID")
+    if (sapisid.isEmpty) sapisid = cookieValue("__Secure-3PAPISID")
+    if (sapisid.isEmpty) sapisid = cookieValue("__Secure-1PAPISID")
+    if (sapisid.isEmpty) return ""
+
+    var now = DateTime.now().millisecondsSinceEpoch ~/ 1000
+    var digest = sha1Hex("${now} ${sapisid} https://www.youtube.com")
+    return "SAPISIDHASH ${now}_${digest}"
+  }
+
+  fun requestHeaders() -> Map {
+    var headers = {
+      "Cookie": cookie,
+      "Origin": "https://www.youtube.com",
+      "Referer": "https://www.youtube.com/",
+      "X-Goog-AuthUser": "0"
+    }
+    var authorization = authorizationValue()
+    if (!authorization.isEmpty) {
+      headers["Authorization"] = authorization
+    }
+    return headers.toJson()
+  }
+
+  /// Paste the Cookie request-header value from a signed-in YouTube browser session.
   fun authenticate() -> Future {
     return SpotubeForm.show(
       "YouTube sign-in",
       [
         {
           objectType: "text",
-          text: "Paste the Cookie header from a YouTube request in your browser. Do not share it; it grants access to your Google/YouTube session.",
+          text: "Paste the complete Cookie request-header value from a signed-in youtube.com request. This is a session secret; do not share it.",
         }.toJson(),
         {
           objectType: "input",
           id: "cookie",
           variant: "text",
-          placeholder: "Cookie: SAPISID=…; SID=…; …",
+          placeholder: "SAPISID=…; SID=…; …",
           required: true,
         }.toJson(),
       ]
     ).then((values) {
       if (values == null) return
-      var cookie = ""
+      var newCookie = ""
       for (var value in values) {
-        if (value["id"] == "cookie") cookie = value["value"] ?? ""
+        if (value["id"] == "cookie") {
+          newCookie = value["value"] ?? ""
+        }
       }
-      cookie = cookie.trim()
-      if (cookie.startsWith("Cookie:") || cookie.startsWith("cookie:")) {
-        cookie = cookie.substring(cookie.indexOf(":") + 1).trim()
+      newCookie = newCookie.trim()
+      if (newCookie.startsWith("Cookie:") || newCookie.startsWith("cookie:")) {
+        newCookie = newCookie.substring(newCookie.indexOf(":") + 1).trim()
       }
-      if (cookie.isEmpty || !cookie.contains("=")) {
-        throw "Invalid cookie header. Paste the full Cookie header value from a YouTube request."
+      if (!hasSessionCookie(newCookie)) {
+        throw "Cookie does not contain a recognizable YouTube session cookie (SAPISID, __Secure-3PAPISID, __Secure-1PAPISID or SID)."
       }
-
-      credentials = { "cookie": cookie }.toJson()
-      return LocalStorage.setString("yt_cookie_auth", JSON.encode(credentials)).then(() {
-        controller.add({ type: "login" }.toJson())
+      cookie = newCookie
+      authenticated = true
+      return LocalStorage.setString("yt_cookie_auth", cookie).then(() {
+        controller.add({ "authenticated": true, "type": "login" }.toJson())
       })
     })
   }
 
-  fun logout() {
+  fun logout() -> Future {
     return LocalStorage.remove("yt_cookie_auth").then(() {
-      credentials = null
-      controller.add({ type: "logout" }.toJson())
+      cookie = ""
+      authenticated = false
+      controller.add({ "authenticated": false, "type": "logout" }.toJson())
     })
-  }
-
-  get cookie -> string {
-    return credentials == null ? "" : (credentials["cookie"] ?? "")
   }
 }
 

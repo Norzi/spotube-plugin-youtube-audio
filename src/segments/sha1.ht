@@ -1,0 +1,84 @@
+// Small pure-Hetu SHA-1 implementation for YouTube SAPISIDHASH.
+// Input is the ASCII string used by the SAPISIDHASH protocol.
+var MASK32 = 0xffffffff
+
+fun rol32(value, bits) {
+  return (((value << bits) | (value >> (32 - bits))) & MASK32)
+}
+
+fun sha1Hex(input: string) -> string {
+  var bytes = input.codeUnits.toList()
+  var bitLength = bytes.length * 8
+  bytes.add(128)
+  while (bytes.length % 64 != 56) {
+    bytes.add(0)
+  }
+  bytes.add((bitLength >> 56) & 255)
+  bytes.add((bitLength >> 48) & 255)
+  bytes.add((bitLength >> 40) & 255)
+  bytes.add((bitLength >> 32) & 255)
+  bytes.add((bitLength >> 24) & 255)
+  bytes.add((bitLength >> 16) & 255)
+  bytes.add((bitLength >> 8) & 255)
+  bytes.add(bitLength & 255)
+
+  var h0 = 0x67452301
+  var h1 = 0xefcdab89
+  var h2 = 0x98badcfe
+  var h3 = 0x10325476
+  var h4 = 0xc3d2e1f0
+  var offset = 0
+  while (offset < bytes.length) {
+    var w = []
+    var i = 0
+    while (i < 16) {
+      var j = offset + i * 4
+      w.add(((bytes[j] << 24) | (bytes[j + 1] << 16) | (bytes[j + 2] << 8) | bytes[j + 3]) & MASK32)
+      i = i + 1
+    }
+    while (i < 80) {
+      w.add(rol32(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1))
+      i = i + 1
+    }
+
+    var a = h0
+    var b = h1
+    var c = h2
+    var d = h3
+    var e = h4
+    i = 0
+    while (i < 80) {
+      var f = 0
+      var k = 0
+      if (i < 20) {
+        f = (b & c) | ((~b) & d)
+        k = 0x5a827999
+      } else if (i < 40) {
+        f = b ^ c ^ d
+        k = 0x6ed9eba1
+      } else if (i < 60) {
+        f = (b & c) | (b & d) | (c & d)
+        k = 0x8f1bbcdc
+      } else {
+        f = b ^ c ^ d
+        k = 0xca62c1d6
+      }
+      var temp = (rol32(a, 5) + f + e + k + w[i]) & MASK32
+      e = d
+      d = c
+      c = rol32(b, 30)
+      b = a
+      a = temp
+      i = i + 1
+    }
+    h0 = (h0 + a) & MASK32
+    h1 = (h1 + b) & MASK32
+    h2 = (h2 + c) & MASK32
+    h3 = (h3 + d) & MASK32
+    h4 = (h4 + e) & MASK32
+    offset = offset + 64
+  }
+  return h0.toRadixString(16).padLeft(8, "0") + h1.toRadixString(16).padLeft(8, "0") + h2.toRadixString(16).padLeft(8, "0") + h3.toRadixString(16).padLeft(8, "0") + h4.toRadixString(16).padLeft(8, "0")
+}
+
+export { sha1Hex }

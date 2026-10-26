@@ -1,21 +1,52 @@
-class CorePlugin {
-  construct ()
+import "module:std" as std
 
-  /// No update channel for this plugin.
-  fun checkUpdate(currentConfig: Map) {
-    return null
+var HttpClient = std.HttpClient
+var RequestOptions = std.RequestOptions
+
+class CorePlugin {
+  var client: HttpClient
+
+  construct (this.client)
+
+  /// Checks for updates to this plugin. Returns null when no newer release exists.
+  fun checkUpdate(currentConfig: Map) -> Future {
+    var versionParts = currentConfig["version"].split(".")
+    var major = int.parse(versionParts[0])
+    var minor = int.parse(versionParts[1])
+    var patch = int.parse(versionParts[2])
+    return client.get_req(
+      "https://api.github.com/repos/Norzi/spotube-plugin-youtube-audio/releases/latest",
+      options: RequestOptions(
+        headers: { "Accept": "application/vnd.github.v3+json" }.toJson()
+      ),
+    ).then((res) {
+      var data = res.data
+      var latestVersion = data["tag_name"].replaceFirst("v", "").split(".")
+      if (latestVersion.length < 3) {
+        throw "Invalid version format from GitHub API: ${data["tag_name"]}"
+      }
+      var latestMajor = int.parse(latestVersion[0])
+      var latestMinor = int.parse(latestVersion[1])
+      var latestPatch = int.parse(latestVersion[2])
+      var isUpdateAvailable = latestMajor > major ||
+        (latestMajor == major && latestMinor > minor) ||
+        (latestMajor == major && latestMinor == minor && latestPatch > patch)
+      if (!isUpdateAvailable) return null
+      var downloadUrl = data["assets"].firstWhere(
+        (asset) => asset["name"] == "plugin.smplug",
+        orElse: () => null
+      )?["browser_download_url"]
+      if (downloadUrl == null) throw "No plugin.smplug asset found in latest release"
+      return {
+        "downloadUrl": downloadUrl,
+        "version": data["tag_name"],
+        "changelog": data["body"] ?? "No changelog available"
+      }.toJson()
+    })
   }
 
   get support -> string {
-    return "
-# Support
-
-Standalone YouTube audio source for Spotube.
-It talks to YouTube directly (InnerTube API), so it can break whenever YouTube changes its protocol.
-"
-  }
-
-  fun scrobble(details: Map) {
+    return "# YouTube Direct Audio\n\nCookie-based YouTube session authentication is optional. Treat cookies as passwords and never share them.\n\nSource: https://github.com/Norzi/spotube-plugin-youtube-audio"
   }
 }
 
