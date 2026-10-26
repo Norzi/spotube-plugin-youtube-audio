@@ -1,0 +1,34 @@
+name: Build plugin
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.35.2
+
+      - name: Install Hetu compiler
+        run: |
+          dart pub global activate hetu_script_dev_tools
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+
+      - name: Compile
+        run: |
+          mkdir -p build example/assets/bytecode
+          make compile
+
+      - name: Archive
+        run: make archive
+
+      - uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: youtube-direct-audio-plugin
+          path: build/plugin.smplug
