@@ -1,16 +1,22 @@
+import "module:std" as std
 import { AudioSourceEndpoint } from './segments/audio_source.ht'
 import { CorePlugin } from './segments/core.ht'
 import { AuthEndpoint } from './segments/auth.ht'
+
+var HttpClient = std.HttpClient
+var HttpBaseOptions = std.HttpBaseOptions
 
 class YouTubeDirectAudioPlugin {
   var audioSource: AudioSourceEndpoint
   var core: CorePlugin
   var auth: AuthEndpoint
+  var api: HttpClient
 
-  construct (){
+  construct () {
     auth = AuthEndpoint()
     audioSource = AudioSourceEndpoint(auth)
-    core = CorePlugin()
+    api = HttpClient(HttpBaseOptions(connectTimeout: 20, receiveTimeout: 30))
+    core = CorePlugin(api)
   }
 }
 
