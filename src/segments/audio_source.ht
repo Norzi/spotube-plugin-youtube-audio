@@ -1,5 +1,11 @@
+import "module:spotube_plugin" as spotube_plugin
 import "module:std" as std
 
+var Webview = spotube_plugin.Webview
+var LocalStorage = spotube_plugin.LocalStorage
+var Crypto = std.Crypto
+var utf8 = std.utf8
+var DateTime = std.DateTime
 var HttpClient = std.HttpClient
 var HttpBaseOptions = std.HttpBaseOptions
 var RequestOptions = std.RequestOptions
@@ -35,6 +41,72 @@ fun parseDuration(text) {
     total = total * 60 + int.parse(p)
   }
   return total
+}
+
+var cookieKey = "yt_cookies"
+var youtubeOrigin = "https://www.youtube.com"
+
+/// Find a cookie value in a "a=1; b=2" header string.
+fun findCookie(cookieStr, name) {
+  var parts = cookieStr.split("; ")
+  for (var part in parts) {
+    var idx = part.indexOf("=")
+    if (idx > 0) {
+      if (part.substring(0, idx) == name) {
+        return part.substring(idx + 1)
+      }
+    }
+  }
+  return null
+}
+
+/// Headers for InnerTube requests. When cookies are known, the request is
+/// authenticated the same way youtube.com does it (Cookie + SAPISIDHASH).
+fun playerHeaders(cookieStr) {
+  var headers = {
+    "Content-Type": "application/json",
+    "User-Agent": visionOsUserAgent,
+    "X-Goog-Api-Format-Version": "2"
+  }
+  if (cookieStr != null && cookieStr.length > 0) {
+    headers["Cookie"] = cookieStr
+    var sapisid = findCookie(cookieStr, "SAPISID")
+    if (sapisid == null) {
+      sapisid = findCookie(cookieStr, "__Secure-3PAPISID")
+    }
+    if (sapisid != null) {
+      var ms = DateTime.now().millisecondsSinceEpoch.toString()
+      var ts = ms.substring(0, ms.length - 3)
+      var hash = Crypto.hexEncode(Crypto.sha1(utf8.encode("${ts} ${sapisid} ${youtubeOrigin}")))
+      headers["Authorization"] = "SAPISIDHASH ${ts}_${hash}"
+      headers["X-Origin"] = youtubeOrigin
+      headers["Origin"] = youtubeOrigin
+      headers["X-Goog-AuthUser"] = "0"
+    }
+  }
+  return headers
+}
+
+/// Opens Google sign-in in an in-app browser. When the user lands on
+/// youtube.com the cookies are saved to local storage and the window closes.
+fun startLogin() {
+  var wv = Webview(uri: "https://accounts.google.com/ServiceLogin?service=youtube&hl=en&continue=https%3A%2F%2Fwww.youtube.com%2F")
+  var finished = false
+  wv.onUrlRequestStream.listen((url) {
+    if (!finished && url.startsWith(youtubeOrigin)) {
+      finished = true
+      wv.getCookies(youtubeOrigin).then((cookies) {
+        var pairs = []
+        for (var c in cookies) {
+          pairs.add("${c.name}=${c.value}")
+        }
+        return LocalStorage.setString(cookieKey, pairs.join("; "))
+      }).then((_) {
+        return wv.close()
+      })
+    }
+  })
+  return wv.open()
 }
 
 class AudioSourceEndpoint {
@@ -154,69 +226,86 @@ class AudioSourceEndpoint {
   fun streams(match: Map) -> Future {
     var videoId = match["id"]
 
-    return getVisitorData().then((vd) {
-      var c = visionOsClient()
-      c["visitorData"] = vd
+    return LocalStorage.containsKey(cookieKey).then((has) {
+      if (has == true) {
+        return LocalStorage.getString(cookieKey)
+      }
+      return null
+    }).then((cookieStr) {
+      return getVisitorData().then((vd) {
+        var c = visionOsClient()
+        c["visitorData"] = vd
 
-      return client.post(
-        "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false&id=${videoId}",
-        data: {
-          "videoId": videoId,
-          "cpn": fixedCpn,
-          "contentCheckOk": true,
-          "racyCheckOk": true,
-          "context": {
-            "client": c,
-            "request": { "internalExperimentFlags": [], "useSsl": true },
-            "user": { "lockedSafetyMode": false }
-          }
-        }.toJson(),
-        options: RequestOptions(
-          headers: {
-            "Content-Type": "application/json",
-            "User-Agent": visionOsUserAgent,
-            "X-Goog-Api-Format-Version": "2"
-          }.toJson()
-        ),
-      ).then((res) {
-        var formats = res.data["streamingData"]?["adaptiveFormats"]
-        if (formats == null || formats.isEmpty) {
-          var st = res.data["playabilityStatus"]
-          throw "YouTube player: no streams for ${videoId}: ${st?["status"]} ${st?["reason"]}"
-        }
+        return client.post(
+          "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false&id=${videoId}",
+          data: {
+            "videoId": videoId,
+            "cpn": fixedCpn,
+            "contentCheckOk": true,
+            "racyCheckOk": true,
+            "context": {
+              "client": c,
+              "request": { "internalExperimentFlags": [], "useSsl": true },
+              "user": { "lockedSafetyMode": false }
+            }
+          }.toJson(),
+          options: RequestOptions(headers: playerHeaders(cookieStr).toJson()),
+        ).then((res) {
+          var formats = res.data["streamingData"]?["adaptiveFormats"]
+          if (formats == null || formats.isEmpty) {
+            var st = res.data["playabilityStatus"]
+            var status = st?["status"]
+            var reason = st?["reason"]
 
-        var out = []
-        for (var f in formats) {
-          var mime = f["mimeType"]
-          var url = f["url"]
-          if (mime == null || url == null) {
-            continue
-          }
-          if (!mime.startsWith("audio/")) {
-            continue
-          }
-          var track = f["audioTrack"]
-          if (track != null && track["audioIsDefault"] == false) {
-            continue
-          }
-          var bitrate = f["bitrate"] ?? f["averageBitrate"]
-          if (bitrate == null) {
-            continue
-          }
-          var isWebm = mime.contains("webm")
-          out.add({
-            "url": url.contains("cpn=") ? url : "${url}&cpn=${fixedCpn}",
-            "container": isWebm ? "webm" : "mp4",
-            "type": "lossy",
-            "codec": isWebm ? "opus" : "aac",
-            "bitrate": bitrate,
-          }.toJson())
-        }
+            if (status == "LOGIN_REQUIRED") {
+              if (cookieStr == null) {
+                // No account yet: open the sign-in window.
+                return startLogin().then((_) {
+                  throw "YouTube asks to sign in (${reason}). Sign in in the window that opened, then play the track again."
+                })
+              }
+              // Saved account did not help: forget it so the next try asks to sign in again.
+              return LocalStorage.remove(cookieKey).then((_) {
+                throw "YouTube still refuses even with the saved account (${reason}). Saved login was cleared; play again to sign in once more."
+              })
+            }
 
-        if (out.isEmpty) {
-          throw "YouTube player: no playable audio streams for ${videoId}"
-        }
-        return out
+            throw "YouTube player: no streams for ${videoId}: ${status} ${reason}"
+          }
+
+          var out = []
+          for (var f in formats) {
+            var mime = f["mimeType"]
+            var url = f["url"]
+            if (mime == null || url == null) {
+              continue
+            }
+            if (!mime.startsWith("audio/")) {
+              continue
+            }
+            var track = f["audioTrack"]
+            if (track != null && track["audioIsDefault"] == false) {
+              continue
+            }
+            var bitrate = f["bitrate"] ?? f["averageBitrate"]
+            if (bitrate == null) {
+              continue
+            }
+            var isWebm = mime.contains("webm")
+            out.add({
+              "url": url.contains("cpn=") ? url : "${url}&cpn=${fixedCpn}",
+              "container": isWebm ? "webm" : "mp4",
+              "type": "lossy",
+              "codec": isWebm ? "opus" : "aac",
+              "bitrate": bitrate,
+            }.toJson())
+          }
+
+          if (out.isEmpty) {
+            throw "YouTube player: no playable audio streams for ${videoId}"
+          }
+          return out
+        })
       })
     })
   }
