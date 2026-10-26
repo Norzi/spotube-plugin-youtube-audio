@@ -3,6 +3,7 @@ import "module:std" as std
 var HttpClient = std.HttpClient
 var HttpBaseOptions = std.HttpBaseOptions
 var RequestOptions = std.RequestOptions
+var HttpResponse = std.HttpResponse
 
 var visionOsUserAgent = "com.google.visionos.youtube/1.04(RealityDevice17,1; U; CPU visionOS 26_6_0 like Mac OS X; US)"
 var webUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
