@@ -1,12 +1,15 @@
 import { AudioSourceEndpoint } from './segments/audio_source.ht'
 import { CorePlugin } from './segments/core.ht'
+import { AuthEndpoint } from './segments/auth.ht'
 
 class YouTubeDirectAudioPlugin {
   var audioSource: AudioSourceEndpoint
   var core: CorePlugin
+  var auth: AuthEndpoint
 
   construct (){
-    audioSource = AudioSourceEndpoint()
+    auth = AuthEndpoint()
+    audioSource = AudioSourceEndpoint(auth)
     core = CorePlugin()
   }
 }
