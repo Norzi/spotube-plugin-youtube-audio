@@ -3,48 +3,43 @@ import "module:std" as std
 var HttpClient = std.HttpClient
 var HttpBaseOptions = std.HttpBaseOptions
 var RequestOptions = std.RequestOptions
-var HttpResponse = std.HttpResponse
 
-var visionOsUserAgent = "com.google.visionos.youtube/1.04(RealityDevice17,1; U; CPU visionOS 26_6_0 like Mac OS X; US)"
-var webUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+// Keep the browser User-Agent consistent with the WEB InnerTube client.
+// Cookies copied from a signed-in browser session are sent only to YouTube.
+var webUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 var fixedCpn = "k3Jd9Qw2LmZp8XyA"
 
-fun visionOsClient() {
-  return {
-    "clientName": "VISIONOS",
-    "clientVersion": "1.04",
-    "clientScreen": "WATCH",
-    "platform": "MOBILE",
-    "deviceMake": "Apple",
-    "deviceModel": "RealityDevice17,1",
-    "osName": "visionOS",
-    "osVersion": "26.6.0.23O770",
-    "hl": "en-GB",
-    "gl": "US",
-    "utcOffsetMinutes": 0
+fun webClient(visitorData) {
+  var c = {
+    "clientName": "WEB",
+    "clientVersion": "2.20250101.00.00",
+    "hl": "en",
+    "gl": "US"
   }
-}
-
-fun parseDuration(text) {
-  if (text == null) {
-    return 0
-  }
-  var parts = text.split(":")
-  var total = 0
-  for (var p in parts) {
-    total = total * 60 + int.parse(p)
-  }
-  return total
+  if (visitorData != null) c["visitorData"] = visitorData
+  return c
 }
 
 class AudioSourceEndpoint {
   var client: HttpClient
+  var auth
 
-  construct () {
+  construct (this.auth) {
     client = HttpClient(HttpBaseOptions(connectTimeout: 20, receiveTimeout: 30))
   }
 
-  // List of containers and their supported qualities
+  fun youtubeHeaders() -> Map {
+    var headers = {
+      "Content-Type": "application/json",
+      "User-Agent": webUserAgent,
+      "Origin": "https://www.youtube.com",
+      "Referer": "https://www.youtube.com/"
+    }
+    var cookie = auth == null ? "" : auth.cookie
+    if (cookie != null && !cookie.isEmpty) headers["Cookie"] = cookie
+    return headers.toJson()
+  }
+
   get supportedPresets -> List {
     return [
       { type: "lossy", name: "mp4", qualities: [ { bitrate: 256000 }, { bitrate: 128000 }, { bitrate: 96000 }, { bitrate: 44000 } ] }.toJson(),
@@ -52,49 +47,30 @@ class AudioSourceEndpoint {
     ]
   }
 
-  /// Search YouTube videos through the public InnerTube search endpoint.
+  /// Search YouTube through InnerTube. Search works without sign-in too.
   fun searchVideos(query: string) -> Future {
     return client.post(
       "https://www.youtube.com/youtubei/v1/search?prettyPrint=false",
       data: {
         "query": query,
         "params": "EgIQAQ%3D%3D",
-        "context": {
-          "client": {
-            "clientName": "WEB",
-            "clientVersion": "2.20250101.00.00",
-            "hl": "en",
-            "gl": "US"
-          }
-        }
+        "context": { "client": webClient(null) }
       }.toJson(),
-      options: RequestOptions(
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": webUserAgent
-        }.toJson()
-      ),
+      options: RequestOptions(headers: youtubeHeaders())
     ).then((res) {
       var sections = res.data["contents"]?["twoColumnSearchResultsRenderer"]?["primaryContents"]?["sectionListRenderer"]?["contents"]
       if (sections == null) {
         throw "YouTube search: unexpected response (status ${res.statusCode})"
       }
-
       var results = []
       for (var section in sections) {
         var items = section["itemSectionRenderer"]?["contents"]
-        if (items == null) {
-          continue
-        }
+        if (items == null) continue
         for (var item in items) {
           var v = item["videoRenderer"]
-          if (v == null) {
-            continue
-          }
+          if (v == null) continue
           var id = v["videoId"]
-          if (id == null) {
-            continue
-          }
+          if (id == null) continue
           results.add({
             "id": id,
             "title": v["title"]?["runs"]?[0]?["text"] ?? "",
@@ -109,17 +85,20 @@ class AudioSourceEndpoint {
     })
   }
 
-  /// Find matching audio sources for a given track.
-  /// The first match is considered the best match.
+  fun parseDuration(text) {
+    if (text == null) return 0
+    var parts = text.split(":")
+    var total = 0
+    for (var p in parts) total = total * 60 + int.parse(p)
+    return total
+  }
+
   fun matches(track: Map) -> Future {
     final artists = track["artists"].map((a)=> a["name"]).join(", ")
     final hasISRC = track["isrc"] != null && track["isrc"].isNotEmpty
     final query = "${track["name"]} ${artists}"
-
-    return searchVideos(hasISRC ? track["isrc"] : query).then((res){
-      if (res.isEmpty && hasISRC) {
-        return searchVideos(query)
-      }
+    return searchVideos(hasISRC ? track["isrc"] : query).then((res) {
+      if (res.isEmpty && hasISRC) return searchVideos(query)
       return res
     })
   }
@@ -129,80 +108,51 @@ class AudioSourceEndpoint {
       "https://www.youtube.com/youtubei/v1/visitor_id?prettyPrint=false",
       data: {
         "context": {
-          "client": visionOsClient(),
+          "client": webClient(null),
           "request": { "internalExperimentFlags": [], "useSsl": true },
           "user": { "lockedSafetyMode": false }
         }
       }.toJson(),
-      options: RequestOptions(
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": visionOsUserAgent,
-          "X-Goog-Api-Format-Version": "2"
-        }.toJson()
-      ),
+      options: RequestOptions(headers: youtubeHeaders())
     ).then((res) {
       var vd = res.data["responseContext"]?["visitorData"]
-      if (vd == null) {
-        throw "YouTube visitor_id: no visitorData (status ${res.statusCode})"
-      }
+      // visitorData is optional for some WEB responses; do not fail solely on it.
       return vd
     })
   }
 
-  /// For the given match, return all available audio streams.
   fun streams(match: Map) -> Future {
     var videoId = match["id"]
-
     return getVisitorData().then((vd) {
-      var c = visionOsClient()
-      c["visitorData"] = vd
-
       return client.post(
-        "https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false&id=${videoId}",
+        "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
         data: {
           "videoId": videoId,
           "cpn": fixedCpn,
           "contentCheckOk": true,
           "racyCheckOk": true,
           "context": {
-            "client": c,
+            "client": webClient(vd),
             "request": { "internalExperimentFlags": [], "useSsl": true },
             "user": { "lockedSafetyMode": false }
           }
         }.toJson(),
-        options: RequestOptions(
-          headers: {
-            "Content-Type": "application/json",
-            "User-Agent": visionOsUserAgent,
-            "X-Goog-Api-Format-Version": "2"
-          }.toJson()
-        ),
+        options: RequestOptions(headers: youtubeHeaders())
       ).then((res) {
         var formats = res.data["streamingData"]?["adaptiveFormats"]
         if (formats == null || formats.isEmpty) {
           var st = res.data["playabilityStatus"]
-          throw "YouTube player: no streams for ${videoId}: ${st?["status"]} ${st?["reason"]}"
+          throw "YouTube player: no streams for ${videoId}: ${st?["status"]} ${st?["reason"]}. If this is LOGIN_REQUIRED, sign in under the plugin's authentication settings."
         }
-
         var out = []
         for (var f in formats) {
           var mime = f["mimeType"]
           var url = f["url"]
-          if (mime == null || url == null) {
-            continue
-          }
-          if (!mime.startsWith("audio/")) {
-            continue
-          }
+          if (mime == null || url == null || !mime.startsWith("audio/")) continue
           var track = f["audioTrack"]
-          if (track != null && track["audioIsDefault"] == false) {
-            continue
-          }
+          if (track != null && track["audioIsDefault"] == false) continue
           var bitrate = f["bitrate"] ?? f["averageBitrate"]
-          if (bitrate == null) {
-            continue
-          }
+          if (bitrate == null) continue
           var isWebm = mime.contains("webm")
           out.add({
             "url": url.contains("cpn=") ? url : "${url}&cpn=${fixedCpn}",
@@ -212,10 +162,7 @@ class AudioSourceEndpoint {
             "bitrate": bitrate,
           }.toJson())
         }
-
-        if (out.isEmpty) {
-          throw "YouTube player: no playable audio streams for ${videoId}"
-        }
+        if (out.isEmpty) throw "YouTube player: no playable audio streams for ${videoId}"
         return out
       })
     })
