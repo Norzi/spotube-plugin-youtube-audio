@@ -1,6 +1,6 @@
 {
   "version": "1.1.0",
-  "name": "YouTube Direct Audio",
+  "name": "YouTube Direct Audio ChatGPT",
   "author": "Norzi",
   "description": "Standalone YouTube audio source with optional cookie-based YouTube authentication",
   "entryPoint": "YouTubeDirectAudioPlugin",
