@@ -2,6 +2,9 @@ import "module:spotube_plugin" as spotube_plugin
 import "module:std" as std
 
 var Webview = spotube_plugin.Webview
+var Cookie = spotube_plugin.Cookie
+var Stream = std.Stream
+var StreamSubscription = std.StreamSubscription
 var LocalStorage = spotube_plugin.LocalStorage
 var Crypto = std.Crypto
 var utf8 = std.utf8
