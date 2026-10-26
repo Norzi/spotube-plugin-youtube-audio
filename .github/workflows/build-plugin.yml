@@ -14,15 +14,34 @@ jobs:
           channel: stable
           flutter-version: 3.35.2
 
-      - name: Install Hetu compiler
-        run: |
-          dart pub global activate hetu_script_dev_tools
-          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
-
-      - name: Compile
+      - name: Compile with a Hetu compiler matching Spotube (0.4.2)
         run: |
           mkdir -p build example/assets/bytecode
-          make compile
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+          export PATH="$PATH:$HOME/.pub-cache/bin"
+          ok=0
+          for v in latest 0.1.0+2 0.1.0+1 0.1.1 0.1.1+1 0.1.2 0.1.2+1 0.1.0; do
+            echo "=== dev tools: $v"
+            if [ "$v" = "latest" ]; then
+              dart pub global activate hetu_script_dev_tools || continue
+            else
+              dart pub global activate hetu_script_dev_tools "$v" || continue
+            fi
+            grep -A3 "hetu_script:" "$HOME/.pub-cache/global_packages/hetu_script_dev_tools/pubspec.lock" | head -5 || true
+            rm -f build/plugin.out
+            hetu compile src/plugin.ht build/plugin.out || continue
+            hdr=$(python3 -c "d=open('build/plugin.out','rb').read(); print('%d.%d.%d' % (d[4], d[5], d[6]*256+d[7]))" || true)
+            echo "=== bytecode version: $hdr"
+            if [ "$hdr" = "0.4.2" ]; then
+              ok=1
+              break
+            fi
+          done
+          if [ "$ok" != "1" ]; then
+            echo "No compiler producing Hetu 0.4.2 bytecode was found"
+            exit 1
+          fi
+          cp build/plugin.out example/assets/bytecode/
 
       - name: Archive
         run: make archive
