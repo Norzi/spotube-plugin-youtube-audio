@@ -1,11 +1,11 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "YouTube Direct Audio",
   "author": "Norzi",
-  "description": "Standalone YouTube audio source: own search and InnerTube (VisionOS client) streams, no dependency on the built-in YouTube engine",
+  "description": "Standalone YouTube audio source with optional cookie-based YouTube authentication",
   "entryPoint": "YouTubeDirectAudioPlugin",
-  "apis": [],
-  "abilities": ["audio-source"],
+  "apis": ["localstorage"],
+  "abilities": ["audio-source", "authentication"],
   "repository": "https://github.com/Norzi/spotube-plugin-youtube-audio",
   "pluginApiVersion": "2.0.0"
 }
